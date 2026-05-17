@@ -1,0 +1,2 @@
+Acct: 1     | Type: Transfer Out    | Amount: -100000.00 | New Balance: 999900000.00
+Acct: 2     | Type: Transfer In     | Amount: 100000.00  | New Balance: 103000.00

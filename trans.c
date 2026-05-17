@@ -31,12 +31,16 @@ enum menu_option {
     MENU_SEARCH = 7,
     MENU_SORT_BY_NAME = 8,
     MENU_SORT_BY_BALANCE = 9,
-    MENU_VIEW_TRANSACTIONS = 10
+    MENU_VIEW_TRANSACTIONS = 10,
+    MENU_FUND_TRANSFER = 11
 };
 
 typedef int (*sort_comparator)(const void *, const void *);
 
 static unsigned int enter_choice(void);
+static void log_transaction(unsigned int account, const char *type, double amount, double new_balance);
+static void fund_transfer(FILE *fptr);
+static void view_transaction_stats(FILE *fptr);
 static void initialize_file(FILE *fptr);
 static void ensure_data_file_layout(FILE *fptr);
 static void sanitize_file(FILE *fptr);
@@ -117,8 +121,10 @@ int main(void) {
                 sort_and_display(cfptr, compare_by_balance, "Sorted by Balance (Descending)");
                 break;
             case MENU_VIEW_TRANSACTIONS:
-                puts("\n--- Transaction Statistics ---");
-                puts("(Tracked via transaction_count field in records)");
+                view_transaction_stats(cfptr);
+                break;
+            case MENU_FUND_TRANSFER:
+                fund_transfer(cfptr);
                 break;
             default:
                 puts("Invalid choice. Please select a valid menu option.");
@@ -272,6 +278,8 @@ static void update_record(FILE *fptr) {
         fputs("Error: failed to update account data.\n", stderr);
         return;
     }
+
+    log_transaction(account, (transaction > 0) ? "Deposit" : "Withdrawal", transaction, client.balance);
 }
 
 static void new_record(FILE *fptr) {
@@ -453,9 +461,10 @@ static unsigned int enter_choice(void) {
     puts("8  - Sort by Last Name");
     puts("9  - Sort by Balance (Highest First)");
     puts("10 - View Transaction Statistics");
+    puts("11 - Fund Transfer");
     puts("==========================");
 
-    if (!prompt_unsigned_in_range("Enter choice: ", 1, 10, &choice)) {
+    if (!prompt_unsigned_in_range("Enter choice: ", 1, 11, &choice)) {
         return 0;
     }
 
@@ -625,4 +634,75 @@ static int compare_by_balance(const void *a, const void *b) {
     if (client_b->balance > client_a->balance) return 1;
     if (client_b->balance < client_a->balance) return -1;
     return 0;
+}
+
+/* --- NEW FEATURES CODE --- */
+
+static void log_transaction(unsigned int account, const char *type, double amount, double new_balance) {
+    FILE *log_file = fopen("history.txt", "a");
+    if (log_file != NULL) {
+        fprintf(log_file, "Acct: %-5u | Type: %-15s | Amount: %-10.2f | New Balance: %.2f\n", 
+                account, type, amount, new_balance);
+        fclose(log_file);
+    }
+}
+
+static void fund_transfer(FILE *fptr) {
+    unsigned int from_acc = 0, to_acc = 0;
+    double amount = 0.0;
+    client_data_t sender, receiver;
+
+    puts("\n--- Fund Transfer ---");
+    if (!prompt_unsigned_in_range("Enter Sender Account (1-100): ", 1, MAX_ACCOUNTS, &from_acc)) return;
+    if (!read_account(fptr, from_acc, &sender) || sender.acct_num == 0) {
+        puts("Sender account not found.");
+        return;
+    }
+
+    if (!prompt_unsigned_in_range("Enter Receiver Account (1-100): ", 1, MAX_ACCOUNTS, &to_acc)) return;
+    if (from_acc == to_acc) {
+        puts("Cannot transfer to the same account.");
+        return;
+    }
+    if (!read_account(fptr, to_acc, &receiver) || receiver.acct_num == 0) {
+        puts("Receiver account not found.");
+        return;
+    }
+
+    printf("Sender Balance: %.2f\n", sender.balance);
+    if (!prompt_double_in_range("Enter amount to transfer: ", 1.0, sender.balance - MIN_BALANCE_LIMIT, &amount)) return;
+
+    /* Process Transfer */
+    sender.balance -= amount;
+    sender.transaction_count++;
+    receiver.balance += amount;
+    receiver.transaction_count++;
+
+    if (write_account(fptr, from_acc, &sender) && write_account(fptr, to_acc, &receiver)) {
+        printf("Successfully transferred %.2f from Acct %u to Acct %u.\n", amount, from_acc, to_acc);
+        /* Log history */
+        log_transaction(from_acc, "Transfer Out", -amount, sender.balance);
+        log_transaction(to_acc, "Transfer In", amount, receiver.balance);
+    } else {
+        fputs("Error: Transfer failed during database write.\n", stderr);
+    }
+}
+
+static void view_transaction_stats(FILE *fptr) {
+    client_data_t client;
+    unsigned int count = 0;
+
+    rewind(fptr);
+    puts("\n--- Transaction Statistics ---");
+    printf("%-8s%-20s%15s\n", "Acct", "Last Name", "Total Txns");
+    puts("---------------------------------------------");
+
+    while (fread(&client, sizeof(client_data_t), 1, fptr) == 1) {
+        if (client.acct_num != 0 && client.transaction_count > 0) {
+            printf("%-8u%-20s%15u\n", client.acct_num, client.last_name, client.transaction_count);
+            count++;
+        }
+    }
+
+    if (count == 0) puts("No active transactions found.");
 }
